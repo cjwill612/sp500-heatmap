@@ -213,47 +213,14 @@
 </div>
 
 <script>
-// ─── SOURCE CONFIG ───────────────────────────────────────────
+// ─── SOURCE CONFIG ────────────────────────────────────────────
+// YOUR Cloudflare Worker URL — update this after deploying the worker
+// It will look like: https://sp500-proxy.YOUR-SUBDOMAIN.workers.dev
+const WORKER_URL = 'https://sp500-proxy1.cjwill612.workers.dev';
+
+// FMP — kept as last resort (403s from browser but worth trying)
 const FMP_KEY  = 'lG4phTpFWJnd3QFm6VpjrRHNcKp5rneO';
 const FMP_BASE = 'https://financialmodelingprep.com/api/v3';
-
-// CORS proxies — tried in order until one works
-// corsproxy.io and allorigins.win are both free, no-auth
-const PROXIES = [
-  url => `https://corsproxy.io/?${encodeURIComponent(url)}`,
-  url => `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`,
-  url => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
-];
-
-// Try each proxy in sequence, return first that works
-async function proxyFetch(url, timeoutMs = 14000) {
-  let lastErr;
-  for (const makeProxyUrl of PROXIES) {
-    try {
-      const proxyUrl = makeProxyUrl(url);
-      const r = await fetchWithTimeout(proxyUrl, timeoutMs);
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const text = await r.text();
-      // allorigins wraps in {contents:...}, others return raw
-      try {
-        const parsed = JSON.parse(text);
-        // allorigins format
-        if (parsed.contents !== undefined) return parsed.contents;
-        // corsproxy / codetabs return raw JSON — return as string for caller to parse
-        return text;
-      } catch {
-        return text; // already raw text/CSV
-      }
-    } catch(e) {
-      lastErr = e;
-      console.warn(`[proxy] ${makeProxyUrl(url).split('?')[0]} failed:`, e.message);
-    }
-  }
-  throw new Error(`All proxies failed: ${lastErr?.message}`);
-}
-
-// Yahoo Finance v7 quote endpoint
-const YF_QUOTE  = sym => `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${sym}&fields=regularMarketPrice,regularMarketChange,regularMarketChangePercent,fiftyTwoWeekLow,fiftyTwoWeekHigh,trailingPE,trailingAnnualDividendYield`;
 
 const SECTOR_META = {
   XLK:  {name:'Information Tech.', spWeight:29.0, schwab:'outperform',    mcap:{mega:78,large:18,mid:4},  holdings:[{sym:'MSFT',co:'Microsoft'},{sym:'AAPL',co:'Apple'},{sym:'NVDA',co:'NVIDIA'},{sym:'AVGO',co:'Broadcom'},{sym:'CRM',co:'Salesforce'}]},
@@ -370,7 +337,75 @@ function fetchWithTimeout(url, ms = 10000) {
     .finally(() => clearTimeout(timer));
 }
 
-// ── SOURCE 1: FMP (works when hosted on a server) ─────────
+// ── SOURCE 1: Cloudflare Worker → Yahoo Finance ───────────
+// The worker runs server-side so CORS is never an issue.
+// It fetches Yahoo Finance and returns data with proper headers.
+async function tryWorker(today, y1, m6, jan1) {
+  if (WORKER_URL.includes('YOUR-SUBDOMAIN')) {
+    throw new Error('Worker URL not configured yet');
+  }
+
+  const get = async url => {
+    const r = await fetchWithTimeout(url, 12000);
+    if (!r.ok) throw new Error(`Worker HTTP ${r.status}`);
+    return r.json();
+  };
+
+  setLoader(10, 'Fetching quotes via worker…');
+
+  // One call for all quotes
+  const allSyms   = ALL_TICKERS.join(',');
+  const quoteData = await get(`${WORKER_URL}/quote?symbols=${allSyms}`);
+  const results   = quoteData?.quoteResponse?.result || [];
+  if (results.length < 5) throw new Error(`Worker: only ${results.length} quotes returned`);
+
+  const qMap = {};
+  results.forEach(q => {
+    qMap[q.symbol] = {
+      price:             q.regularMarketPrice,
+      change:            q.regularMarketChange,
+      changesPercentage: q.regularMarketChangePercent,
+      yearLow:           q.fiftyTwoWeekLow,
+      yearHigh:          q.fiftyTwoWeekHigh,
+      pe:                q.trailingPE || null,
+      divYield:          q.trailingAnnualDividendYield
+                           ? q.trailingAnnualDividendYield * 100 : null,
+    };
+  });
+
+  setLoader(30, 'Fetching price history…');
+
+  // Fetch 1y chart for each ticker in parallel via worker
+  const chartResults = await Promise.all(
+    ALL_TICKERS.map(sym =>
+      get(`${WORKER_URL}/chart?symbol=${sym}&range=1y`).catch(() => null)
+    )
+  );
+
+  const histMap = {};
+  chartResults.forEach((data, i) => {
+    const sym = ALL_TICKERS[i];
+    try {
+      const chart  = data?.chart?.result?.[0];
+      if (!chart) return;
+      const ts     = chart.timestamp || [];
+      const closes = chart.indicators?.adjclose?.[0]?.adjclose
+                  || chart.indicators?.quote?.[0]?.close || [];
+      histMap[sym] = ts
+        .map((t, j) => ({
+          date:     new Date(t * 1000).toISOString().split('T')[0],
+          close:    closes[j],
+          adjClose: closes[j],
+        }))
+        .filter(r => r.close != null)
+        .reverse(); // newest first
+    } catch { /* silent — missing history is ok */ }
+  });
+
+  return { qMap, histMap, holdingResults: null, jan1, m6, y1, source: 'Yahoo (Worker)' };
+}
+
+// ── SOURCE 2: FMP direct (last resort) ────────────────────
 async function tryFMP(today, y1, m6, jan1) {
   const get = async path => {
     const sep = path.includes('?') ? '&' : '?';
@@ -386,7 +421,7 @@ async function tryFMP(today, y1, m6, jan1) {
   const qMap = {};
   quotes.forEach(q => qMap[q.symbol] = q);
 
-  setLoader(28, 'FMP: historical prices…');
+  setLoader(35, 'FMP: historical prices…');
   const histResults = await Promise.all(
     ALL_TICKERS.map(sym =>
       get(`/historical-price-full/${sym}?from=${fmt(y1)}&to=${fmt(today)}`)
@@ -396,76 +431,12 @@ async function tryFMP(today, y1, m6, jan1) {
   const histMap = {};
   histResults.forEach(r => { histMap[r.symbol || ''] = r.historical || []; });
 
-  setLoader(55, 'FMP: holdings…');
+  setLoader(65, 'FMP: holdings…');
   const holdingResults = await Promise.all(
     SECTOR_TICKERS.map(sym => get(`/etf-holder/${sym}`).catch(() => []))
   );
 
   return { qMap, histMap, holdingResults, jan1, m6, y1, source: 'FMP' };
-}
-
-// ── SOURCE 2: Yahoo Finance via multi-proxy ───────────────
-async function tryYahoo(today, y1, m6, jan1) {
-  const proxy = async url => {
-    const text = await proxyFetch(url, 14000);
-    return JSON.parse(text);
-  };
-
-  setLoader(10, 'Trying Yahoo Finance (via proxy)…');
-
-  // Yahoo v7 quote — all tickers in one call
-  const allSyms   = ALL_TICKERS.join(',');
-  const quoteUrl  = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${allSyms}` +
-    `&fields=regularMarketPrice,regularMarketChange,regularMarketChangePercent,` +
-    `fiftyTwoWeekLow,fiftyTwoWeekHigh,trailingPE,trailingAnnualDividendYield`;
-
-  const quoteData = await proxy(quoteUrl);
-  const results   = quoteData?.quoteResponse?.result || [];
-  if (results.length < 5) throw new Error('Yahoo: too few results');
-
-  const qMap = {};
-  results.forEach(q => {
-    qMap[q.symbol] = {
-      price:             q.regularMarketPrice,
-      change:            q.regularMarketChange,
-      changesPercentage: q.regularMarketChangePercent,
-      yearLow:           q.fiftyTwoWeekLow,
-      yearHigh:          q.fiftyTwoWeekHigh,
-      pe:                q.trailingPE || null,
-      // Yahoo yields are decimals: 0.027 = 2.7%
-      divYield:          q.trailingAnnualDividendYield ? q.trailingAnnualDividendYield * 100 : null,
-    };
-  });
-
-  setLoader(35, 'Yahoo: historical prices (1y charts)…');
-
-  // Yahoo v8 chart — 1y range gives us enough for YTD, 6m, 1y lookbacks
-  const chartResults = await Promise.all(
-    ALL_TICKERS.map(sym =>
-      proxy(`https://query1.finance.yahoo.com/v8/finance/chart/${sym}?interval=1d&range=1y`)
-        .catch(() => null)
-    )
-  );
-
-  const histMap = {};
-  chartResults.forEach((data, i) => {
-    const sym = ALL_TICKERS[i];
-    try {
-      const chart  = data?.chart?.result?.[0];
-      if (!chart) return;
-      const ts     = chart.timestamp || [];
-      const closes = chart.indicators?.adjclose?.[0]?.adjclose
-                  || chart.indicators?.quote?.[0]?.close
-                  || [];
-      // Build {date, close} array sorted descending (newest first) — matches FMP format
-      histMap[sym] = ts
-        .map((t, j) => ({ date: new Date(t * 1000).toISOString().split('T')[0], close: closes[j], adjClose: closes[j] }))
-        .filter(r => r.close != null)
-        .reverse();
-    } catch { /* silent */ }
-  });
-
-  return { qMap, histMap, holdingResults: null, jan1, m6, y1, source: 'Yahoo Finance' };
 }
 
 // ── MAIN WATERFALL ────────────────────────────────────────
@@ -476,183 +447,58 @@ async function loadAllData() {
   const jan1  = getJan1();
   const errors = [];
 
-  // — Source 1: FMP ————————————————————————————————————————
-  try {
-    const result = await tryFMP(today, y1, m6, jan1);
-    setLoader(80, 'FMP: building cards…');
+  const finish = (result, label, warn = false) => {
     assembleData(result);
-    setLoader(95, 'FMP: index pills…');
     updateIndexPills(result.qMap, result.histMap, jan1);
-    setLoader(100, '✓ Live via FMP');
+    setLoader(100, `✓ Live via ${label}`);
+    if (warn) showBanner(
+      `<strong>ℹ Using ${label}</strong> — primary source unavailable. ` +
+      `<span style="opacity:.7;font-size:10px">${errors.join(' · ')}</span>`, true
+    );
     document.getElementById('last-updated').textContent =
-      'Live · FMP · ' + new Date().toLocaleString('en-US', {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',timeZoneName:'short'});
+      `Live · ${label} · ` + new Date().toLocaleString('en-US',
+        { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit', timeZoneName:'short' });
     setTimeout(() => { hideLoader(); renderAndAnimate(); }, 350);
+  };
+
+  // — Source 1: Cloudflare Worker + Yahoo ————————————————
+  try {
+    const result = await tryWorker(today, y1, m6, jan1);
+    setLoader(90, 'Building heatmap…');
+    finish(result, 'Yahoo Finance');
+    return;
+  } catch(e) {
+    errors.push('Worker: ' + e.message);
+    console.warn('[SP500] Worker failed →', e.message);
+  }
+
+  // — Source 2: FMP direct ———————————————————————————————
+  try {
+    setLoader(5, 'Trying FMP…');
+    const result = await tryFMP(today, y1, m6, jan1);
+    setLoader(90, 'Building heatmap…');
+    finish(result, 'FMP', true);
     return;
   } catch(e) {
     errors.push('FMP: ' + e.message);
     console.warn('[SP500] FMP failed →', e.message);
   }
 
-  // — Source 2: Yahoo via AllOrigins proxy —————————————————
-  try {
-    setLoader(5, 'FMP unavailable — trying Yahoo Finance…');
-    const result = await tryYahoo(today, y1, m6, jan1);
-    setLoader(85, 'Yahoo: building cards…');
-    assembleData(result);
-    setLoader(97, 'Yahoo: index pills…');
-    updateIndexPills(result.qMap, result.histMap, jan1);
-    setLoader(100, '✓ Live via Yahoo');
-
-    showBanner(
-      `<strong>ℹ FMP unavailable</strong> (${errors[0]}) — data loaded via <strong>Yahoo Finance</strong>. ` +
-      `Holdings shown are estimates (Yahoo doesn't expose ETF composition).`,
-      true  // amber/warning style
-    );
-    document.getElementById('last-updated').textContent =
-      'Live · Yahoo Finance · ' + new Date().toLocaleString('en-US', {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',timeZoneName:'short'});
-    setTimeout(() => { hideLoader(); renderAndAnimate(); }, 350);
-    return;
-  } catch(e) {
-    errors.push('Yahoo: ' + e.message);
-    console.warn('[SP500] Yahoo failed →', e.message);
-  }
-
-  // — Source 3: Stooq CSV scraper via AllOrigins ————————————
-  try {
-    setLoader(5, 'Yahoo unavailable — trying Stooq CSV…');
-    const result = await tryStooq(today, y1, m6, jan1);
-    setLoader(90, 'Stooq: building cards…');
-    assembleData(result);
-    setLoader(97, 'Stooq: index pills…');
-    updateIndexPills(result.qMap, result.histMap, jan1);
-    setLoader(100, '✓ Live via Stooq');
-
-    showBanner(
-      `<strong>ℹ Using Stooq</strong> — FMP and Yahoo both unavailable ` +
-      `<span style="opacity:.7;font-size:10px">(${errors.join(' · ')})</span>. ` +
-      `Prices and returns are live. P/E and dividend yield are estimates.`,
-      true
-    );
-    document.getElementById('last-updated').textContent =
-      'Live · Stooq · ' + new Date().toLocaleString('en-US', {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',timeZoneName:'short'});
-    setTimeout(() => { hideLoader(); renderAndAnimate(); }, 350);
-    return;
-  } catch(e) {
-    errors.push('Stooq: ' + e.message);
-    console.warn('[SP500] Stooq failed →', e.message);
-  }
-
-  // — All 3 sources failed: nothing to show ————————————————
+  // — All failed ————————————————————————————————————————
   hideLoader();
   showBanner(
-    `<strong>⚠ All 3 data sources failed.</strong> Check your internet connection and reload.<br>` +
+    `<strong>⚠ Could not load live data.</strong> ` +
+    `<a href="javascript:location.reload()" style="color:var(--accent);text-decoration:underline">Reload to retry</a><br>` +
     `<span style="opacity:.65;font-size:10px">${errors.join(' · ')}</span>`
   );
-  // Render empty skeleton so the UI at least appears
   SECTOR_TICKERS.forEach(sym => {
-    liveData[sym] = { price:0, ytd:0, ret6m:null, ret1y:null, pe:null, divYield:null,
+    liveData[sym] = {
+      price:0, ytd:0, ret6m:null, ret1y:null, pe:null, divYield:null,
       w52lo:0, w52hi:0, change:0, changePct:0,
-      holdings: SECTOR_META[sym].holdings.map((h,j) => ({...h, pct:[22,14,8,5,4][j]})) };
+      holdings: SECTOR_META[sym].holdings.map((h,j) => ({...h, pct:[22,14,8,5,4][j]}))
+    };
   });
   renderAndAnimate();
-}
-
-// ── SOURCE 3: STOOQ CSV via multi-proxy ───────────────────
-// Stooq serves free daily OHLCV CSVs — no auth, no key.
-// We try multiple CORS proxies to bypass browser restrictions.
-async function tryStooq(today, y1, m6, jan1) {
-  const proxyCSV = async sym => {
-    const stooqSym = sym.toLowerCase() + '.us';
-    const d1  = fmt(y1).replace(/-/g, '');
-    const d2  = fmt(today).replace(/-/g, '');
-    const url = `https://stooq.com/q/d/l/?s=${stooqSym}&d1=${d1}&d2=${d2}&i=d`;
-    const text = await proxyFetch(url, 14000);
-    return parseStooqCSV(text, sym);
-  };
-
-  setLoader(10, 'Stooq: fetching price history…');
-
-  // Fire all requests in parallel — one CSV per ticker (~400 days each)
-  const rawResults = await Promise.allSettled(
-    ALL_TICKERS.map(sym => proxyCSV(sym))
-  );
-
-  // Count successes
-  const succeeded = rawResults.filter(r => r.status === 'fulfilled' && r.value?.rows?.length > 5);
-  if (succeeded.length < 6) {
-    throw new Error(`Only ${succeeded.length}/${ALL_TICKERS.length} tickers returned data`);
-  }
-
-  setLoader(70, 'Stooq: computing returns…');
-
-  const qMap   = {};
-  const histMap = {};
-
-  rawResults.forEach((result, i) => {
-    const sym = ALL_TICKERS[i];
-    if (result.status !== 'fulfilled' || !result.value?.rows?.length) return;
-
-    const rows = result.value.rows; // [{date, open, high, low, close, volume}] newest first
-
-    // Current price = most recent close
-    const latest  = rows[0];
-    const prev    = rows[1] || latest; // previous day for day-change
-    const price   = latest.close;
-    const change  = price - prev.close;
-    const changePct = prev.close ? (change / prev.close) * 100 : 0;
-
-    // 52-week high/low from the rows we have
-    const closes = rows.map(r => r.close).filter(Boolean);
-    const w52hi  = Math.max(...closes);
-    const w52lo  = Math.min(...closes);
-
-    qMap[sym] = {
-      price, change, changesPercentage: changePct,
-      yearHigh: w52hi, yearLow: w52lo,
-      // Stooq CSV doesn't include PE or dividends — leave null
-      pe: null, divYield: null,
-      lastAnnualDividend: null,
-    };
-
-    // histMap format: [{date, close, adjClose}] newest-first (matches FMP/Yahoo format)
-    histMap[sym] = rows.map(r => ({ date: r.date, close: r.close, adjClose: r.close }));
-  });
-
-  // Verify we got at least SPY for index pills
-  if (!qMap['SPY']) throw new Error('Missing SPY data');
-
-  return { qMap, histMap, holdingResults: null, jan1, m6, y1, source: 'Stooq' };
-}
-
-// Parse Stooq's CSV response (Date,Open,High,Low,Close,Volume)
-function parseStooqCSV(csv, sym) {
-  const lines = csv.trim().split('\n');
-  if (lines.length < 3) throw new Error(`Too few rows for ${sym}`);
-
-  // Header: Date,Open,High,Low,Close,Volume  (sometimes No data available)
-  if (lines[0].toLowerCase().includes('no data') || lines[1]?.toLowerCase().includes('no data')) {
-    throw new Error(`No Stooq data for ${sym}`);
-  }
-
-  const rows = [];
-  for (let i = 1; i < lines.length; i++) {
-    const parts = lines[i].split(',');
-    if (parts.length < 5) continue;
-    const close = parseFloat(parts[4]);
-    if (!close || isNaN(close)) continue;
-    rows.push({
-      date:   parts[0].trim(),  // YYYY-MM-DD
-      open:   parseFloat(parts[1]),
-      high:   parseFloat(parts[2]),
-      low:    parseFloat(parts[3]),
-      close,
-      volume: parseInt(parts[5]) || 0,
-    });
-  }
-
-  // Stooq returns oldest-first — reverse so newest is first (matches our convention)
-  rows.reverse();
-  return { sym, rows };
 }
 
 // ── HELPERS ───────────────────────────────────────────────
