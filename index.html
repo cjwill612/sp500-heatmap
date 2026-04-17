@@ -342,14 +342,11 @@ function fetchWithTimeout(url, ms = 10000) {
 // It fetches Yahoo Finance and returns data with proper headers.
 async function tryWorker(today, y1, m6, jan1) {
   if (WORKER_URL.includes('cjwill612')) {
-    throw new Error('Worker URL not configured yet');
-  }
-
-  const get = async url => {
+    const get = async url => {
     const r = await fetchWithTimeout(url, 12000);
     if (!r.ok) throw new Error(`Worker HTTP ${r.status}`);
     return r.json();
-  };
+  }};
 
   setLoader(10, 'Fetching quotes via worker…');
 
