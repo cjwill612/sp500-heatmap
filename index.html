@@ -369,36 +369,26 @@ async function tryWorker(today, y1, m6, jan1) {
     };
   });
 
-  setLoader(30, 'Fetching price history…');
+  setLoader(30, 'Fetching price history via FMP…');
 
-  // Fetch 1y chart for each ticker in parallel via worker
-  const chartResults = await Promise.all(
+  const fmpGet = async path => {
+    const sep = path.includes('?') ? '&' : '?';
+    const r   = await fetchWithTimeout(`${FMP_BASE}${path}${sep}apikey=${FMP_KEY}`, 10000);
+    if (!r.ok) throw new Error(`FMP HTTP ${r.status}`);
+    return r.json();
+  };
+
+  const histResults = await Promise.all(
     ALL_TICKERS.map(sym =>
-      get(`${WORKER_URL}/chart?symbol=${sym}&range=1y`).catch(() => null)
+      fmpGet(`/historical-price-full/${sym}?from=${fmt(y1)}&to=${fmt(today)}`)
+        .catch(() => ({ symbol: sym, historical: [] }))
     )
   );
 
   const histMap = {};
-  chartResults.forEach((data, i) => {
-    const sym = ALL_TICKERS[i];
-    try {
-      const chart  = data?.chart?.result?.[0];
-      if (!chart) return;
-      const ts     = chart.timestamp || [];
-      const closes = chart.indicators?.adjclose?.[0]?.adjclose
-                  || chart.indicators?.quote?.[0]?.close || [];
-      histMap[sym] = ts
-        .map((t, j) => ({
-          date:     new Date(t * 1000).toISOString().split('T')[0],
-          close:    closes[j],
-          adjClose: closes[j],
-        }))
-        .filter(r => r.close != null)
-        .reverse(); // newest first
-    } catch { /* silent — missing history is ok */ }
-  });
+  histResults.forEach(r => { histMap[r.symbol || ''] = r.historical || []; });
 
-  return { qMap, histMap, holdingResults: null, jan1, m6, y1, source: 'Yahoo (Worker)' };
+  return { qMap, histMap, holdingResults: null, jan1, m6, y1, source: 'Yahoo (Worker) + FMP' };
 }
 
 // ── SOURCE 2: FMP direct (last resort) ────────────────────
