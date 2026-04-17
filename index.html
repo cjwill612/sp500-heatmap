@@ -341,7 +341,7 @@ function fetchWithTimeout(url, ms = 10000) {
 // The worker runs server-side so CORS is never an issue.
 // It fetches Yahoo Finance and returns data with proper headers.
 async function tryWorker(today, y1, m6, jan1) {
-  if (WORKER_URL.includes('YOUR-SUBDOMAIN')) {
+  if (WORKER_URL.includes('cjwill612')) {
     throw new Error('Worker URL not configured yet');
   }
 
