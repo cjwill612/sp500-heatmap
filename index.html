@@ -1,0 +1,778 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>S&P 500 Sector Heatmap · Live</title>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600;700&family=DM+Sans:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:#0a0c10; --card:#12151c; --card-hover:#181c26;
+    --border:rgba(255,255,255,0.07); --border-hover:rgba(255,255,255,0.16);
+    --text-primary:#f0f2f8; --text-secondary:#8892a4; --text-muted:#4a5568;
+    --green-bright:#00e676; --green-mid:#26a65b;
+    --red-bright:#ff3d57; --red-mid:#c0392b;
+    --gold:#f0c040; --accent:#5b8dee; --accent2:#a78bfa;
+    --mono:'JetBrains Mono',monospace;
+    --serif:'Playfair Display',serif;
+    --sans:'DM Sans',sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--text-primary);font-family:var(--sans);min-height:100vh;overflow-x:hidden}
+  body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(rgba(91,141,238,.03) 1px,transparent 1px),linear-gradient(90deg,rgba(91,141,238,.03) 1px,transparent 1px);background-size:40px 40px;pointer-events:none;z-index:0}
+  .wrapper{position:relative;z-index:1;max-width:1400px;margin:0 auto;padding:32px 20px 60px}
+
+  /* LOADER */
+  #loader{position:fixed;inset:0;background:var(--bg);z-index:100;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;transition:opacity .5s,visibility .5s}
+  #loader.hidden{opacity:0;visibility:hidden}
+  .loader-title{font-family:var(--serif);font-size:22px;color:var(--text-primary)}
+  .loader-bar-wrap{width:280px;height:3px;background:rgba(255,255,255,.07);border-radius:2px;overflow:hidden}
+  .loader-bar{height:100%;background:linear-gradient(90deg,var(--accent),var(--accent2));border-radius:2px;width:0%;transition:width .4s ease}
+  .loader-status{font-family:var(--mono);font-size:11px;color:var(--text-muted);letter-spacing:.5px;min-height:18px}
+
+  /* HEADER */
+  .header{display:flex;align-items:flex-start;justify-content:space-between;gap:24px;margin-bottom:32px;flex-wrap:wrap}
+  .header-left h1{font-family:var(--serif);font-size:clamp(24px,4vw,36px);font-weight:700;letter-spacing:-.5px;background:linear-gradient(135deg,#f0f2f8 30%,#8892a4);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;margin-bottom:4px}
+  .subtitle{font-size:13px;color:var(--text-secondary);font-family:var(--mono);letter-spacing:.5px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .live-dot{display:inline-flex;align-items:center;gap:5px;color:var(--green-bright);font-size:11px}
+  .live-dot::before{content:'';width:7px;height:7px;border-radius:50%;background:var(--green-bright);box-shadow:0 0 6px var(--green-bright);animation:pulse 2s infinite}
+  @keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.5;transform:scale(.85)}}
+  .last-updated{font-size:11px;color:var(--text-muted);font-family:var(--mono)}
+
+  /* ERROR */
+  #error-banner{display:none;background:rgba(255,61,87,.1);border:1px solid rgba(255,61,87,.3);border-radius:10px;padding:14px 18px;margin-bottom:20px;font-family:var(--mono);font-size:12px;color:var(--red-bright);line-height:1.6}
+
+  /* PILLS */
+  .index-pills{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  .pill{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:8px 14px;display:flex;flex-direction:column;align-items:center;gap:2px;min-width:90px;transition:border-color .3s}
+  .pill.loaded{border-color:rgba(91,141,238,.25)}
+  .pill-name{font-size:10px;color:var(--text-secondary);font-family:var(--mono);letter-spacing:1px;text-transform:uppercase}
+  .pill-val{font-family:var(--mono);font-size:15px;font-weight:600}
+  .pill-val.green{color:var(--green-bright)}.pill-val.red{color:var(--red-bright)}
+  .pill-val.loading{color:var(--text-muted);animation:blink 1s infinite}
+  @keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+
+  /* TOOLBAR */
+  .toolbar{display:flex;align-items:center;gap:8px;margin-bottom:24px;flex-wrap:wrap}
+  .toolbar-label{font-size:11px;color:var(--text-secondary);font-family:var(--mono);text-transform:uppercase;letter-spacing:1px;margin-right:4px}
+  .sort-btn{background:var(--card);border:1px solid var(--border);color:var(--text-secondary);font-family:var(--mono);font-size:11px;font-weight:500;padding:7px 14px;border-radius:6px;cursor:pointer;letter-spacing:.5px;text-transform:uppercase;transition:all .2s;white-space:nowrap}
+  .sort-btn:hover{border-color:var(--accent);color:var(--accent)}
+  .sort-btn.active{background:rgba(91,141,238,.15);border-color:var(--accent);color:var(--accent)}
+
+  /* LEGEND */
+  .legend-wrap{margin-bottom:28px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+  .legend-label{font-size:11px;color:var(--text-secondary);font-family:var(--mono);white-space:nowrap}
+  .legend-bar{flex:1;min-width:200px;max-width:480px;height:10px;border-radius:5px;background:linear-gradient(90deg,#8b0000 0%,#c0392b 20%,#e74c3c 35%,#333a4a 50%,#26a65b 65%,#00b894 80%,#00e676 100%)}
+  .legend-ticks{display:flex;justify-content:space-between;font-family:var(--mono);font-size:10px;color:var(--text-muted);margin-top:4px;min-width:200px;max-width:480px}
+
+  /* GRID */
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px}
+
+  /* CARD */
+  .card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:20px;cursor:pointer;position:relative;overflow:hidden;transition:border-color .25s,transform .2s,box-shadow .25s;opacity:0;transform:translateY(20px)}
+  .card.visible{opacity:1;transform:translateY(0);transition:opacity .5s ease,transform .5s ease,border-color .25s,box-shadow .25s}
+  .card:hover{border-color:var(--border-hover);box-shadow:0 8px 32px rgba(0,0,0,.4);background:var(--card-hover)}
+  .card::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;border-radius:14px 0 0 14px}
+  .card::after{content:'';position:absolute;inset:0;opacity:0;border-radius:14px;transition:opacity .3s;pointer-events:none}
+  .card:hover::after{opacity:1}
+  .card[data-perf="strong-gain"]::before{background:var(--green-bright)}
+  .card[data-perf="strong-gain"]::after{background:radial-gradient(ellipse at top left,rgba(0,230,118,.06),transparent 60%)}
+  .card[data-perf="gain"]::before{background:var(--green-mid)}
+  .card[data-perf="gain"]::after{background:radial-gradient(ellipse at top left,rgba(38,166,91,.05),transparent 60%)}
+  .card[data-perf="neutral"]::before{background:#555}
+  .card[data-perf="loss"]::before{background:var(--red-mid)}
+  .card[data-perf="loss"]::after{background:radial-gradient(ellipse at top left,rgba(192,57,43,.05),transparent 60%)}
+  .card[data-perf="strong-loss"]::before{background:var(--red-bright)}
+  .card[data-perf="strong-loss"]::after{background:radial-gradient(ellipse at top left,rgba(255,61,87,.07),transparent 60%)}
+
+  .card-header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px}
+  .sector-name{font-family:var(--serif);font-size:16px;font-weight:600;color:var(--text-primary);line-height:1.2}
+  .ticker-badge{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);border-radius:6px;padding:4px 9px;font-family:var(--mono);font-size:12px;font-weight:600;color:var(--text-secondary);letter-spacing:1px}
+  .ytd-main{font-family:var(--mono);font-size:28px;font-weight:600;margin-bottom:4px;line-height:1}
+  .ytd-main.positive{color:var(--green-bright)}.ytd-main.negative{color:var(--red-bright)}.ytd-main.flat{color:var(--text-secondary)}
+  .ytd-label{font-size:10px;color:var(--text-muted);font-family:var(--mono);text-transform:uppercase;letter-spacing:1px;margin-bottom:14px}
+
+  .returns-row{display:flex;gap:10px;margin-bottom:14px}
+  .ret-item{flex:1;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.05);border-radius:7px;padding:7px 8px;text-align:center}
+  .ret-label{font-size:9px;color:var(--text-muted);font-family:var(--mono);text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px}
+  .ret-val{font-family:var(--mono);font-size:13px;font-weight:500}
+  .ret-val.pos{color:#26a65b}.ret-val.neg{color:#e74c3c}.ret-val.neu{color:var(--text-secondary)}
+
+  .meta-row{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}
+  .meta-item{display:flex;flex-direction:column;gap:2px;min-width:60px}
+  .meta-lbl{font-size:9px;color:var(--text-muted);font-family:var(--mono);text-transform:uppercase;letter-spacing:.5px}
+  .meta-val{font-family:var(--mono);font-size:13px;font-weight:500;color:var(--text-primary)}
+  .schwab-badge{display:inline-flex;align-items:center;gap:5px;border-radius:6px;padding:4px 10px;font-family:var(--mono);font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.8px;margin-top:2px}
+  .schwab-badge::before{content:'●';font-size:8px}
+  .schwab-badge.outperform{background:rgba(0,230,118,.1);border:1px solid rgba(0,230,118,.2);color:#00e676}
+  .schwab-badge.marketperform{background:rgba(240,192,64,.1);border:1px solid rgba(240,192,64,.2);color:var(--gold)}
+  .schwab-badge.underperform{background:rgba(255,61,87,.1);border:1px solid rgba(255,61,87,.2);color:var(--red-bright)}
+
+  /* EXPAND */
+  .expand-panel{max-height:0;overflow:hidden;transition:max-height .45s cubic-bezier(.4,0,.2,1),opacity .35s;opacity:0}
+  .card.expanded .expand-panel{max-height:600px;opacity:1}
+  .expand-divider{border:none;border-top:1px solid var(--border);margin:16px 0}
+  .expand-section-title{font-size:10px;color:var(--text-muted);font-family:var(--mono);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px}
+  .holding-row{display:flex;align-items:center;gap:8px;margin-bottom:7px}
+  .holding-rank{font-family:var(--mono);font-size:9px;color:var(--text-muted);width:14px;text-align:right}
+  .holding-name{font-family:var(--mono);font-size:11px;color:var(--text-secondary);flex:0 0 44px;font-weight:600}
+  .holding-company{font-size:11px;color:var(--text-muted);flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .holding-bar-wrap{flex:0 0 60px;height:4px;background:rgba(255,255,255,.07);border-radius:2px;overflow:hidden}
+  .holding-bar{height:100%;border-radius:2px;background:var(--accent)}
+  .holding-pct{font-family:var(--mono);font-size:10px;color:var(--text-secondary);width:36px;text-align:right}
+  .mcap-bar-wrap{height:8px;border-radius:4px;overflow:hidden;display:flex;margin-bottom:6px}
+  .mcap-legend{display:flex;gap:12px;flex-wrap:wrap}
+  .mcap-dot{display:flex;align-items:center;gap:5px;font-family:var(--mono);font-size:9px}
+  .mcap-dot::before{content:'■';font-size:8px}
+  .range-wrap{margin-top:14px}
+  .range-track{position:relative;height:6px;background:rgba(255,255,255,.07);border-radius:3px;margin:8px 0 4px}
+  .range-fill{position:absolute;left:0;top:0;height:100%;background:linear-gradient(90deg,var(--red-mid),var(--green-mid));border-radius:3px}
+  .range-marker{position:absolute;top:50%;transform:translate(-50%,-50%);width:12px;height:12px;background:white;border-radius:50%;border:2px solid var(--bg);box-shadow:0 0 6px rgba(255,255,255,.4);z-index:1}
+  .range-labels{display:flex;justify-content:space-between;font-family:var(--mono);font-size:9px;color:var(--text-muted)}
+  .range-current{text-align:center;font-family:var(--mono);font-size:11px;color:var(--text-primary);margin-top:2px}
+  .price-change-row{display:flex;justify-content:space-between;margin-top:10px;padding:8px 10px;background:rgba(255,255,255,.03);border-radius:7px}
+  .price-change-item{text-align:center}
+  .price-change-lbl{font-family:var(--mono);font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px}
+  .price-change-val{font-family:var(--mono);font-size:12px;font-weight:600}
+  .expand-hint{text-align:center;font-size:10px;color:var(--text-muted);font-family:var(--mono);margin-top:14px;letter-spacing:.5px;transition:opacity .2s}
+  .card.expanded .expand-hint{opacity:0;height:0;margin:0;overflow:hidden}
+
+  /* EXPLAINER */
+  .explainer{margin-top:40px;background:linear-gradient(135deg,rgba(91,141,238,.07),rgba(167,139,250,.05));border:1px solid rgba(91,141,238,.2);border-radius:14px;padding:24px 28px;opacity:0;transform:translateY(16px);transition:opacity .6s ease,transform .6s ease}
+  .explainer.visible{opacity:1;transform:translateY(0)}
+  .explainer h3{font-family:var(--serif);font-size:18px;font-weight:600;color:var(--accent2);margin-bottom:16px;display:flex;align-items:center;gap:8px}
+  .explainer h3::before{content:'✦';font-size:14px}
+  .explainer-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:16px}
+  .explainer-item h4{font-family:var(--mono);font-size:11px;font-weight:600;color:var(--accent);text-transform:uppercase;letter-spacing:.8px;margin-bottom:5px}
+  .explainer-item p{font-size:13px;color:var(--text-secondary);line-height:1.6}
+  .footer-note{margin-top:24px;font-size:11px;color:var(--text-muted);font-family:var(--mono);border-top:1px solid var(--border);padding-top:14px;line-height:1.6}
+
+  ::-webkit-scrollbar{width:6px}::-webkit-scrollbar-track{background:var(--bg)}::-webkit-scrollbar-thumb{background:#2a2f3e;border-radius:3px}
+  @media(max-width:600px){.header{flex-direction:column}.grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+
+<div id="loader">
+  <div class="loader-title">Loading Live Market Data</div>
+  <div class="loader-bar-wrap"><div class="loader-bar" id="loader-bar"></div></div>
+  <div class="loader-status" id="loader-status">Connecting to FMP…</div>
+</div>
+
+<div class="wrapper">
+  <header class="header">
+    <div class="header-left">
+      <h1>S&P 500 Sector Heatmap</h1>
+      <div class="subtitle">
+        <span class="live-dot">LIVE DATA</span>
+        <span class="last-updated" id="last-updated">—</span>
+      </div>
+    </div>
+    <div class="index-pills">
+      <div class="pill" id="pill-spy"><span class="pill-name">S&P 500</span><span class="pill-val loading" id="spy-val">···</span></div>
+      <div class="pill" id="pill-qqq"><span class="pill-name">NASDAQ</span><span class="pill-val loading" id="qqq-val">···</span></div>
+      <div class="pill" id="pill-iwm"><span class="pill-name">Russell 2K</span><span class="pill-val loading" id="iwm-val">···</span></div>
+    </div>
+  </header>
+
+  <div id="error-banner"></div>
+
+  <div class="toolbar">
+    <span class="toolbar-label">Sort by:</span>
+    <button class="sort-btn active" onclick="sortCards('ytd',event)">YTD Return</button>
+    <button class="sort-btn" onclick="sortCards('weight',event)">S&P Weight</button>
+    <button class="sort-btn" onclick="sortCards('pe',event)">P/E Ratio</button>
+    <button class="sort-btn" onclick="sortCards('div',event)">Div Yield</button>
+  </div>
+
+  <div class="legend-wrap">
+    <span class="legend-label">−20%</span>
+    <div>
+      <div class="legend-bar"></div>
+      <div class="legend-ticks"><span>−20</span><span>−10</span><span>0</span><span>+10</span><span>+20%</span></div>
+    </div>
+    <span class="legend-label">+20%</span>
+  </div>
+
+  <div class="grid" id="grid"></div>
+
+  <div class="explainer" id="explainer">
+    <h3>Beginner's Guide to Sector Investing</h3>
+    <div class="explainer-grid">
+      <div class="explainer-item"><h4>What is a Sector?</h4><p>The S&P 500 is split into 11 GICS industries. Each groups similar companies — e.g., Tech includes Apple, Microsoft, Nvidia.</p></div>
+      <div class="explainer-item"><h4>What is an ETF?</h4><p>A Sector ETF (like XLK) lets you own all stocks in a sector with one trade. No need to pick individual stocks.</p></div>
+      <div class="explainer-item"><h4>YTD Return</h4><p>How much the sector has gained or lost since Jan 1. Fetched live from FMP every time you open this page.</p></div>
+      <div class="explainer-item"><h4>P/E Ratio</h4><p>Price-to-Earnings. Lower = potentially cheaper. A P/E of 15 means you pay $15 per $1 of annual earnings.</p></div>
+      <div class="explainer-item"><h4>Dividend Yield</h4><p>Annual cash per share as % of price. Utilities & Staples yield more; growth sectors like Tech yield less.</p></div>
+      <div class="explainer-item"><h4>S&P Weight</h4><p>Share of total S&P 500 value. Tech at ~29% means ~$1 in $3 of index money is in tech stocks.</p></div>
+      <div class="explainer-item"><h4>Schwab Rating</h4><p>Forward analyst view: Outperform = beat market expected; Mkt Perform = in-line; Underperform = lag expected.</p></div>
+      <div class="explainer-item"><h4>52-Week Range</h4><p>High/low over the past year. The dot shows where today's price sits within that range.</p></div>
+    </div>
+    <div class="footer-note">⚠ Live data via Financial Modeling Prep API — refreshes on each page load. Returns are price-based. Past performance does not guarantee future results. Not financial advice.</div>
+  </div>
+</div>
+
+<script>
+// ─── SOURCE CONFIG ───────────────────────────────────────────
+const FMP_KEY  = 'lG4phTpFWJnd3QFm6VpjrRHNcKp5rneO';
+const FMP_BASE = 'https://financialmodelingprep.com/api/v3';
+
+// CORS proxies — tried in order until one works
+// corsproxy.io and allorigins.win are both free, no-auth
+const PROXIES = [
+  url => `https://corsproxy.io/?${encodeURIComponent(url)}`,
+  url => `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`,
+  url => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
+];
+
+// Try each proxy in sequence, return first that works
+async function proxyFetch(url, timeoutMs = 14000) {
+  let lastErr;
+  for (const makeProxyUrl of PROXIES) {
+    try {
+      const proxyUrl = makeProxyUrl(url);
+      const r = await fetchWithTimeout(proxyUrl, timeoutMs);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const text = await r.text();
+      // allorigins wraps in {contents:...}, others return raw
+      try {
+        const parsed = JSON.parse(text);
+        // allorigins format
+        if (parsed.contents !== undefined) return parsed.contents;
+        // corsproxy / codetabs return raw JSON — return as string for caller to parse
+        return text;
+      } catch {
+        return text; // already raw text/CSV
+      }
+    } catch(e) {
+      lastErr = e;
+      console.warn(`[proxy] ${makeProxyUrl(url).split('?')[0]} failed:`, e.message);
+    }
+  }
+  throw new Error(`All proxies failed: ${lastErr?.message}`);
+}
+
+// Yahoo Finance v7 quote endpoint
+const YF_QUOTE  = sym => `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${sym}&fields=regularMarketPrice,regularMarketChange,regularMarketChangePercent,fiftyTwoWeekLow,fiftyTwoWeekHigh,trailingPE,trailingAnnualDividendYield`;
+
+const SECTOR_META = {
+  XLK:  {name:'Information Tech.', spWeight:29.0, schwab:'outperform',    mcap:{mega:78,large:18,mid:4},  holdings:[{sym:'MSFT',co:'Microsoft'},{sym:'AAPL',co:'Apple'},{sym:'NVDA',co:'NVIDIA'},{sym:'AVGO',co:'Broadcom'},{sym:'CRM',co:'Salesforce'}]},
+  XLF:  {name:'Financials',        spWeight:13.8, schwab:'outperform',    mcap:{mega:60,large:32,mid:8},  holdings:[{sym:'BRK.B',co:'Berkshire Hathaway'},{sym:'JPM',co:'JPMorgan'},{sym:'V',co:'Visa'},{sym:'MA',co:'Mastercard'},{sym:'BAC',co:'Bank of America'}]},
+  XLV:  {name:'Health Care',       spWeight:11.2, schwab:'outperform',    mcap:{mega:48,large:40,mid:12}, holdings:[{sym:'LLY',co:'Eli Lilly'},{sym:'UNH',co:'UnitedHealth'},{sym:'JNJ',co:'J&J'},{sym:'ABT',co:'Abbott Labs'},{sym:'MRK',co:'Merck'}]},
+  XLY:  {name:'Consumer Discr.',   spWeight:9.8,  schwab:'marketperform', mcap:{mega:68,large:24,mid:8},  holdings:[{sym:'AMZN',co:'Amazon'},{sym:'TSLA',co:'Tesla'},{sym:'HD',co:'Home Depot'},{sym:'MCD',co:"McDonald's"},{sym:'NKE',co:'Nike'}]},
+  XLC:  {name:'Comm. Services',    spWeight:9.1,  schwab:'marketperform', mcap:{mega:72,large:22,mid:6},  holdings:[{sym:'META',co:'Meta'},{sym:'GOOGL',co:'Alphabet A'},{sym:'GOOG',co:'Alphabet C'},{sym:'NFLX',co:'Netflix'},{sym:'T',co:'AT&T'}]},
+  XLI:  {name:'Industrials',       spWeight:8.4,  schwab:'outperform',    mcap:{mega:28,large:52,mid:20}, holdings:[{sym:'GE',co:'GE Aerospace'},{sym:'RTX',co:'RTX Corp'},{sym:'HON',co:'Honeywell'},{sym:'CAT',co:'Caterpillar'},{sym:'UNP',co:'Union Pacific'}]},
+  XLP:  {name:'Consumer Staples',  spWeight:5.8,  schwab:'underperform',  mcap:{mega:65,large:28,mid:7},  holdings:[{sym:'WMT',co:'Walmart'},{sym:'COST',co:'Costco'},{sym:'PG',co:'P&G'},{sym:'KO',co:'Coca-Cola'},{sym:'PEP',co:'PepsiCo'}]},
+  XLE:  {name:'Energy',            spWeight:3.5,  schwab:'outperform',    mcap:{mega:58,large:30,mid:12}, holdings:[{sym:'XOM',co:'Exxon Mobil'},{sym:'CVX',co:'Chevron'},{sym:'COP',co:'ConocoPhillips'},{sym:'EOG',co:'EOG Resources'},{sym:'SLB',co:'Schlumberger'}]},
+  XLU:  {name:'Utilities',         spWeight:2.4,  schwab:'marketperform', mcap:{mega:20,large:55,mid:25}, holdings:[{sym:'NEE',co:'NextEra'},{sym:'SO',co:'Southern Co.'},{sym:'DUK',co:'Duke Energy'},{sym:'CEG',co:'Constellation'},{sym:'VST',co:'Vistra'}]},
+  XLB:  {name:'Materials',         spWeight:2.3,  schwab:'marketperform', mcap:{mega:30,large:48,mid:22}, holdings:[{sym:'LIN',co:'Linde'},{sym:'APD',co:'Air Products'},{sym:'FCX',co:'Freeport'},{sym:'SHW',co:'Sherwin-Williams'},{sym:'NEM',co:'Newmont'}]},
+  XLRE: {name:'Real Estate',       spWeight:2.2,  schwab:'underperform',  mcap:{mega:15,large:52,mid:33}, holdings:[{sym:'PLD',co:'Prologis'},{sym:'AMT',co:'American Tower'},{sym:'EQIX',co:'Equinix'},{sym:'SPG',co:'Simon Property'},{sym:'WELL',co:'Welltower'}]},
+};
+
+const SECTOR_TICKERS = Object.keys(SECTOR_META);
+const INDEX_TICKERS  = ['SPY','QQQ','IWM'];
+const ALL_TICKERS    = [...SECTOR_TICKERS,...INDEX_TICKERS];
+
+let liveData    = {};
+let currentSort = 'ytd';
+
+// ── UTILITIES ─────────────────────────────────────────────
+const setLoader = (pct, msg) => {
+  document.getElementById('loader-bar').style.width = pct + '%';
+  document.getElementById('loader-status').textContent = msg;
+};
+const hideLoader = () => document.getElementById('loader').classList.add('hidden');
+const showBanner = (html, isWarning=false) => {
+  const el = document.getElementById('error-banner');
+  el.style.display = 'block';
+  el.style.borderColor = isWarning ? 'rgba(240,192,64,.3)' : 'rgba(255,61,87,.3)';
+  el.style.background  = isWarning ? 'rgba(240,192,64,.07)' : 'rgba(255,61,87,.1)';
+  el.style.color       = isWarning ? 'var(--gold)' : 'var(--red-bright)';
+  el.innerHTML = html;
+};
+
+const fmt     = d => d.toISOString().split('T')[0];
+const getJan1 = () => { const d=new Date(); return new Date(d.getFullYear(),0,3); };
+
+function closestPrice(hist, targetDate) {
+  if (!hist?.length) return null;
+  const target = new Date(targetDate).getTime();
+  let best = null, bestDiff = Infinity;
+  for (const row of hist) {
+    const t    = new Date(row.date).getTime();
+    const diff = Math.abs(t - target);
+    if (diff < bestDiff) { bestDiff = diff; best = row.adjClose ?? row.close; }
+    if (t < target - 10*86400*1000) break;
+  }
+  return best;
+}
+
+function updateIndexPills(qMap, histMap, jan1) {
+  INDEX_TICKERS.forEach((sym, i) => {
+    const q    = qMap[sym] || {};
+    const hist = histMap[sym] || [];
+    const p    = q.price || 0;
+    const pj   = closestPrice(hist, jan1);
+    const ytdPct = (pj && p) ? ((p - pj) / pj) * 100 : (q.changesPercentage || 0);
+    const ids  = ['spy-val','qqq-val','iwm-val'];
+    const pids = ['pill-spy','pill-qqq','pill-iwm'];
+    const el   = document.getElementById(ids[i]);
+    el.className   = 'pill-val ' + (ytdPct >= 0 ? 'green' : 'red');
+    el.textContent = fmtPct(ytdPct);
+    document.getElementById(pids[i]).classList.add('loaded');
+  });
+}
+
+function assembleData({ qMap, histMap, holdingResults, jan1, m6, y1 }) {
+  SECTOR_TICKERS.forEach((sym, i) => {
+    const q     = qMap[sym] || {};
+    const hist  = histMap[sym] || [];
+    const price = q.price || 0;
+
+    const p_jan1 = closestPrice(hist, jan1);
+    const p_m6   = closestPrice(hist, m6);
+    const p_y1   = closestPrice(hist, y1);
+
+    const ytd   = p_jan1 && price ? ((price - p_jan1) / p_jan1) * 100 : 0;
+    const ret6m = p_m6   && price ? ((price - p_m6)   / p_m6)   * 100 : null;
+    const ret1y = p_y1   && price ? ((price - p_y1)   / p_y1)   * 100 : null;
+
+    // Dividend yield: Yahoo sends as fraction (0.027), FMP via lastAnnualDividend
+    let divYield = q.divYield ?? null;
+    if (divYield == null && q.lastAnnualDividend && price)
+      divYield = (q.lastAnnualDividend / price) * 100;
+
+    const hdata = Array.isArray(holdingResults?.[i]) ? holdingResults[i] : [];
+    const holdings = hdata.length >= 3
+      ? hdata.sort((a,b)=>(b.weightPercentage||0)-(a.weightPercentage||0))
+             .slice(0,5)
+             .map(h=>({sym:h.asset, co:h.name||h.asset, pct:parseFloat(h.weightPercentage)||0}))
+      : SECTOR_META[sym].holdings.map((h,j)=>({...h, pct:[22,14,8,5,4][j]}));
+
+    liveData[sym] = {
+      price, ytd, ret6m, ret1y,
+      pe:        q.pe ?? null,
+      divYield,
+      w52lo:     q.yearLow  || 0,
+      w52hi:     q.yearHigh || 0,
+      change:    q.change            || 0,
+      changePct: q.changesPercentage || 0,
+      holdings
+    };
+  });
+}
+
+// ── FETCH WITH TIMEOUT (compatible with Safari + older Chrome) ──
+function fetchWithTimeout(url, ms = 10000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  return fetch(url, { signal: controller.signal })
+    .finally(() => clearTimeout(timer));
+}
+
+// ── SOURCE 1: FMP (works when hosted on a server) ─────────
+async function tryFMP(today, y1, m6, jan1) {
+  const get = async path => {
+    const sep = path.includes('?') ? '&' : '?';
+    const r   = await fetchWithTimeout(`${FMP_BASE}${path}${sep}apikey=${FMP_KEY}`, 8000);
+    if (!r.ok) throw new Error(`FMP HTTP ${r.status}`);
+    return r.json();
+  };
+
+  setLoader(10, 'Trying FMP…');
+  const quotes = await get(`/quote/${ALL_TICKERS.join(',')}`);
+  if (!Array.isArray(quotes) || quotes.length < 5) throw new Error('FMP: empty/blocked');
+
+  const qMap = {};
+  quotes.forEach(q => qMap[q.symbol] = q);
+
+  setLoader(28, 'FMP: historical prices…');
+  const histResults = await Promise.all(
+    ALL_TICKERS.map(sym =>
+      get(`/historical-price-full/${sym}?from=${fmt(y1)}&to=${fmt(today)}`)
+        .catch(() => ({ symbol: sym, historical: [] }))
+    )
+  );
+  const histMap = {};
+  histResults.forEach(r => { histMap[r.symbol || ''] = r.historical || []; });
+
+  setLoader(55, 'FMP: holdings…');
+  const holdingResults = await Promise.all(
+    SECTOR_TICKERS.map(sym => get(`/etf-holder/${sym}`).catch(() => []))
+  );
+
+  return { qMap, histMap, holdingResults, jan1, m6, y1, source: 'FMP' };
+}
+
+// ── SOURCE 2: Yahoo Finance via multi-proxy ───────────────
+async function tryYahoo(today, y1, m6, jan1) {
+  const proxy = async url => {
+    const text = await proxyFetch(url, 14000);
+    return JSON.parse(text);
+  };
+
+  setLoader(10, 'Trying Yahoo Finance (via proxy)…');
+
+  // Yahoo v7 quote — all tickers in one call
+  const allSyms   = ALL_TICKERS.join(',');
+  const quoteUrl  = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${allSyms}` +
+    `&fields=regularMarketPrice,regularMarketChange,regularMarketChangePercent,` +
+    `fiftyTwoWeekLow,fiftyTwoWeekHigh,trailingPE,trailingAnnualDividendYield`;
+
+  const quoteData = await proxy(quoteUrl);
+  const results   = quoteData?.quoteResponse?.result || [];
+  if (results.length < 5) throw new Error('Yahoo: too few results');
+
+  const qMap = {};
+  results.forEach(q => {
+    qMap[q.symbol] = {
+      price:             q.regularMarketPrice,
+      change:            q.regularMarketChange,
+      changesPercentage: q.regularMarketChangePercent,
+      yearLow:           q.fiftyTwoWeekLow,
+      yearHigh:          q.fiftyTwoWeekHigh,
+      pe:                q.trailingPE || null,
+      // Yahoo yields are decimals: 0.027 = 2.7%
+      divYield:          q.trailingAnnualDividendYield ? q.trailingAnnualDividendYield * 100 : null,
+    };
+  });
+
+  setLoader(35, 'Yahoo: historical prices (1y charts)…');
+
+  // Yahoo v8 chart — 1y range gives us enough for YTD, 6m, 1y lookbacks
+  const chartResults = await Promise.all(
+    ALL_TICKERS.map(sym =>
+      proxy(`https://query1.finance.yahoo.com/v8/finance/chart/${sym}?interval=1d&range=1y`)
+        .catch(() => null)
+    )
+  );
+
+  const histMap = {};
+  chartResults.forEach((data, i) => {
+    const sym = ALL_TICKERS[i];
+    try {
+      const chart  = data?.chart?.result?.[0];
+      if (!chart) return;
+      const ts     = chart.timestamp || [];
+      const closes = chart.indicators?.adjclose?.[0]?.adjclose
+                  || chart.indicators?.quote?.[0]?.close
+                  || [];
+      // Build {date, close} array sorted descending (newest first) — matches FMP format
+      histMap[sym] = ts
+        .map((t, j) => ({ date: new Date(t * 1000).toISOString().split('T')[0], close: closes[j], adjClose: closes[j] }))
+        .filter(r => r.close != null)
+        .reverse();
+    } catch { /* silent */ }
+  });
+
+  return { qMap, histMap, holdingResults: null, jan1, m6, y1, source: 'Yahoo Finance' };
+}
+
+// ── MAIN WATERFALL ────────────────────────────────────────
+async function loadAllData() {
+  const today = new Date();
+  const y1    = new Date(today); y1.setFullYear(y1.getFullYear() - 1);
+  const m6    = new Date(today); m6.setMonth(m6.getMonth() - 6);
+  const jan1  = getJan1();
+  const errors = [];
+
+  // — Source 1: FMP ————————————————————————————————————————
+  try {
+    const result = await tryFMP(today, y1, m6, jan1);
+    setLoader(80, 'FMP: building cards…');
+    assembleData(result);
+    setLoader(95, 'FMP: index pills…');
+    updateIndexPills(result.qMap, result.histMap, jan1);
+    setLoader(100, '✓ Live via FMP');
+    document.getElementById('last-updated').textContent =
+      'Live · FMP · ' + new Date().toLocaleString('en-US', {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',timeZoneName:'short'});
+    setTimeout(() => { hideLoader(); renderAndAnimate(); }, 350);
+    return;
+  } catch(e) {
+    errors.push('FMP: ' + e.message);
+    console.warn('[SP500] FMP failed →', e.message);
+  }
+
+  // — Source 2: Yahoo via AllOrigins proxy —————————————————
+  try {
+    setLoader(5, 'FMP unavailable — trying Yahoo Finance…');
+    const result = await tryYahoo(today, y1, m6, jan1);
+    setLoader(85, 'Yahoo: building cards…');
+    assembleData(result);
+    setLoader(97, 'Yahoo: index pills…');
+    updateIndexPills(result.qMap, result.histMap, jan1);
+    setLoader(100, '✓ Live via Yahoo');
+
+    showBanner(
+      `<strong>ℹ FMP unavailable</strong> (${errors[0]}) — data loaded via <strong>Yahoo Finance</strong>. ` +
+      `Holdings shown are estimates (Yahoo doesn't expose ETF composition).`,
+      true  // amber/warning style
+    );
+    document.getElementById('last-updated').textContent =
+      'Live · Yahoo Finance · ' + new Date().toLocaleString('en-US', {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',timeZoneName:'short'});
+    setTimeout(() => { hideLoader(); renderAndAnimate(); }, 350);
+    return;
+  } catch(e) {
+    errors.push('Yahoo: ' + e.message);
+    console.warn('[SP500] Yahoo failed →', e.message);
+  }
+
+  // — Source 3: Stooq CSV scraper via AllOrigins ————————————
+  try {
+    setLoader(5, 'Yahoo unavailable — trying Stooq CSV…');
+    const result = await tryStooq(today, y1, m6, jan1);
+    setLoader(90, 'Stooq: building cards…');
+    assembleData(result);
+    setLoader(97, 'Stooq: index pills…');
+    updateIndexPills(result.qMap, result.histMap, jan1);
+    setLoader(100, '✓ Live via Stooq');
+
+    showBanner(
+      `<strong>ℹ Using Stooq</strong> — FMP and Yahoo both unavailable ` +
+      `<span style="opacity:.7;font-size:10px">(${errors.join(' · ')})</span>. ` +
+      `Prices and returns are live. P/E and dividend yield are estimates.`,
+      true
+    );
+    document.getElementById('last-updated').textContent =
+      'Live · Stooq · ' + new Date().toLocaleString('en-US', {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',timeZoneName:'short'});
+    setTimeout(() => { hideLoader(); renderAndAnimate(); }, 350);
+    return;
+  } catch(e) {
+    errors.push('Stooq: ' + e.message);
+    console.warn('[SP500] Stooq failed →', e.message);
+  }
+
+  // — All 3 sources failed: nothing to show ————————————————
+  hideLoader();
+  showBanner(
+    `<strong>⚠ All 3 data sources failed.</strong> Check your internet connection and reload.<br>` +
+    `<span style="opacity:.65;font-size:10px">${errors.join(' · ')}</span>`
+  );
+  // Render empty skeleton so the UI at least appears
+  SECTOR_TICKERS.forEach(sym => {
+    liveData[sym] = { price:0, ytd:0, ret6m:null, ret1y:null, pe:null, divYield:null,
+      w52lo:0, w52hi:0, change:0, changePct:0,
+      holdings: SECTOR_META[sym].holdings.map((h,j) => ({...h, pct:[22,14,8,5,4][j]})) };
+  });
+  renderAndAnimate();
+}
+
+// ── SOURCE 3: STOOQ CSV via multi-proxy ───────────────────
+// Stooq serves free daily OHLCV CSVs — no auth, no key.
+// We try multiple CORS proxies to bypass browser restrictions.
+async function tryStooq(today, y1, m6, jan1) {
+  const proxyCSV = async sym => {
+    const stooqSym = sym.toLowerCase() + '.us';
+    const d1  = fmt(y1).replace(/-/g, '');
+    const d2  = fmt(today).replace(/-/g, '');
+    const url = `https://stooq.com/q/d/l/?s=${stooqSym}&d1=${d1}&d2=${d2}&i=d`;
+    const text = await proxyFetch(url, 14000);
+    return parseStooqCSV(text, sym);
+  };
+
+  setLoader(10, 'Stooq: fetching price history…');
+
+  // Fire all requests in parallel — one CSV per ticker (~400 days each)
+  const rawResults = await Promise.allSettled(
+    ALL_TICKERS.map(sym => proxyCSV(sym))
+  );
+
+  // Count successes
+  const succeeded = rawResults.filter(r => r.status === 'fulfilled' && r.value?.rows?.length > 5);
+  if (succeeded.length < 6) {
+    throw new Error(`Only ${succeeded.length}/${ALL_TICKERS.length} tickers returned data`);
+  }
+
+  setLoader(70, 'Stooq: computing returns…');
+
+  const qMap   = {};
+  const histMap = {};
+
+  rawResults.forEach((result, i) => {
+    const sym = ALL_TICKERS[i];
+    if (result.status !== 'fulfilled' || !result.value?.rows?.length) return;
+
+    const rows = result.value.rows; // [{date, open, high, low, close, volume}] newest first
+
+    // Current price = most recent close
+    const latest  = rows[0];
+    const prev    = rows[1] || latest; // previous day for day-change
+    const price   = latest.close;
+    const change  = price - prev.close;
+    const changePct = prev.close ? (change / prev.close) * 100 : 0;
+
+    // 52-week high/low from the rows we have
+    const closes = rows.map(r => r.close).filter(Boolean);
+    const w52hi  = Math.max(...closes);
+    const w52lo  = Math.min(...closes);
+
+    qMap[sym] = {
+      price, change, changesPercentage: changePct,
+      yearHigh: w52hi, yearLow: w52lo,
+      // Stooq CSV doesn't include PE or dividends — leave null
+      pe: null, divYield: null,
+      lastAnnualDividend: null,
+    };
+
+    // histMap format: [{date, close, adjClose}] newest-first (matches FMP/Yahoo format)
+    histMap[sym] = rows.map(r => ({ date: r.date, close: r.close, adjClose: r.close }));
+  });
+
+  // Verify we got at least SPY for index pills
+  if (!qMap['SPY']) throw new Error('Missing SPY data');
+
+  return { qMap, histMap, holdingResults: null, jan1, m6, y1, source: 'Stooq' };
+}
+
+// Parse Stooq's CSV response (Date,Open,High,Low,Close,Volume)
+function parseStooqCSV(csv, sym) {
+  const lines = csv.trim().split('\n');
+  if (lines.length < 3) throw new Error(`Too few rows for ${sym}`);
+
+  // Header: Date,Open,High,Low,Close,Volume  (sometimes No data available)
+  if (lines[0].toLowerCase().includes('no data') || lines[1]?.toLowerCase().includes('no data')) {
+    throw new Error(`No Stooq data for ${sym}`);
+  }
+
+  const rows = [];
+  for (let i = 1; i < lines.length; i++) {
+    const parts = lines[i].split(',');
+    if (parts.length < 5) continue;
+    const close = parseFloat(parts[4]);
+    if (!close || isNaN(close)) continue;
+    rows.push({
+      date:   parts[0].trim(),  // YYYY-MM-DD
+      open:   parseFloat(parts[1]),
+      high:   parseFloat(parts[2]),
+      low:    parseFloat(parts[3]),
+      close,
+      volume: parseInt(parts[5]) || 0,
+    });
+  }
+
+  // Stooq returns oldest-first — reverse so newest is first (matches our convention)
+  rows.reverse();
+  return { sym, rows };
+}
+
+// ── HELPERS ───────────────────────────────────────────────
+const fmtPct = (v,sign=true) => v==null?'N/A':((sign&&v>0?'+':'')+v.toFixed(1)+'%');
+const colorClass = v => v==null?'neu':v>0.5?'pos':v<-0.5?'neg':'neu';
+const perfCat = ytd => ytd>=10?'strong-gain':ytd>=1?'gain':ytd>=-3?'neutral':ytd>=-10?'loss':'strong-loss';
+
+// ── CARD ──────────────────────────────────────────────────
+function buildCard(sym) {
+  const d  = liveData[sym], m = SECTOR_META[sym];
+  const pc = perfCat(d.ytd);
+  const maxP = Math.max(...d.holdings.map(h=>h.pct),1);
+  const rp = d.w52hi>d.w52lo ? Math.max(0,Math.min(100,((d.price-d.w52lo)/(d.w52hi-d.w52lo))*100)) : 50;
+  const schwabLabel = {outperform:'Outperform',marketperform:'Mkt Perform',underperform:'Underperform'}[m.schwab];
+  const dChgC = d.changePct>=0?'var(--green-bright)':'var(--red-bright)';
+  const mc = ['#5b8dee','#a78bfa','#00b894'];
+  const mv = [m.mcap.mega,m.mcap.large,m.mcap.mid];
+
+  return `<div class="card" data-sym="${sym}" data-perf="${pc}"
+    data-ytd="${d.ytd}" data-weight="${m.spWeight}" data-pe="${d.pe??99}" data-div="${d.divYield??0}"
+    onclick="toggleCard(this)">
+    <div class="card-header">
+      <div class="sector-name">${m.name}</div>
+      <div class="ticker-badge">${sym}</div>
+    </div>
+    <div class="ytd-main ${d.ytd>0?'positive':d.ytd<0?'negative':'flat'}">${fmtPct(d.ytd)}</div>
+    <div class="ytd-label">YTD Return ${new Date().getFullYear()}</div>
+    <div class="returns-row">
+      <div class="ret-item"><div class="ret-label">6-Month</div><div class="ret-val ${colorClass(d.ret6m)}">${fmtPct(d.ret6m)}</div></div>
+      <div class="ret-item"><div class="ret-label">1-Year</div><div class="ret-val ${colorClass(d.ret1y)}">${fmtPct(d.ret1y)}</div></div>
+    </div>
+    <div class="meta-row">
+      <div class="meta-item"><span class="meta-lbl">S&amp;P Wt</span><span class="meta-val">${m.spWeight.toFixed(1)}%</span></div>
+      <div class="meta-item"><span class="meta-lbl">Fwd P/E</span><span class="meta-val">${d.pe?d.pe.toFixed(1)+'×':'N/A'}</span></div>
+      <div class="meta-item"><span class="meta-lbl">Div Yield</span><span class="meta-val">${d.divYield?d.divYield.toFixed(1)+'%':'N/A'}</span></div>
+      <div class="meta-item"><span class="schwab-badge ${m.schwab}">${schwabLabel}</span></div>
+    </div>
+    <div class="expand-hint">TAP TO EXPAND ▾</div>
+    <div class="expand-panel">
+      <hr class="expand-divider">
+      <div class="expand-section-title">Top 5 Holdings by Weight</div>
+      ${d.holdings.map((h,i)=>`
+        <div class="holding-row">
+          <span class="holding-rank">${i+1}</span>
+          <span class="holding-name">${h.sym}</span>
+          <span class="holding-company">${h.co}</span>
+          <div class="holding-bar-wrap"><div class="holding-bar" style="width:${((h.pct/maxP)*100).toFixed(0)}%"></div></div>
+          <span class="holding-pct">${h.pct.toFixed(1)}%</span>
+        </div>`).join('')}
+      <hr class="expand-divider">
+      <div class="expand-section-title">Market Cap Breakdown</div>
+      <div class="mcap-bar-wrap">${mv.map((v,i)=>`<div style="width:${v}%;height:100%;background:${mc[i]}"></div>`).join('')}</div>
+      <div class="mcap-legend">${['Mega','Large','Mid'].map((l,i)=>`<span class="mcap-dot" style="color:${mc[i]}">${l} ${mv[i]}%</span>`).join('')}</div>
+      <div class="range-wrap">
+        <div class="expand-section-title" style="margin-top:14px">52-Week Price Range</div>
+        <div class="range-track">
+          <div class="range-fill" style="width:${rp.toFixed(1)}%"></div>
+          <div class="range-marker" style="left:${rp.toFixed(1)}%"></div>
+        </div>
+        <div class="range-labels"><span>$${d.w52lo.toFixed(2)}</span><span>$${d.w52hi.toFixed(2)}</span></div>
+        <div class="range-current">Current: $${d.price.toFixed(2)} · ${rp.toFixed(0)}% of range</div>
+      </div>
+      <div class="price-change-row">
+        <div class="price-change-item"><div class="price-change-lbl">Day Change</div><div class="price-change-val" style="color:${dChgC}">${d.changePct>=0?'+':''}${d.changePct.toFixed(2)}%</div></div>
+        <div class="price-change-item"><div class="price-change-lbl">Day $</div><div class="price-change-val" style="color:${dChgC}">${d.change>=0?'+':''}$${d.change.toFixed(2)}</div></div>
+        <div class="price-change-item"><div class="price-change-lbl">Price</div><div class="price-change-val">$${d.price.toFixed(2)}</div></div>
+      </div>
+    </div>
+  </div>`;
+}
+
+// ── RENDER ────────────────────────────────────────────────
+function getSorted(key) {
+  return [...SECTOR_TICKERS].sort((a,b)=>{
+    const da=liveData[a],db=liveData[b],ma=SECTOR_META[a],mb=SECTOR_META[b];
+    if(key==='ytd')    return db.ytd-da.ytd;
+    if(key==='weight') return mb.spWeight-ma.spWeight;
+    if(key==='pe')     return (da.pe??99)-(db.pe??99);
+    if(key==='div')    return (db.divYield??0)-(da.divYield??0);
+    return 0;
+  });
+}
+
+function renderAndAnimate() {
+  document.getElementById('grid').innerHTML = getSorted(currentSort).map(buildCard).join('');
+  observeCards();
+  const exp=document.getElementById('explainer');
+  const eo=new IntersectionObserver(e=>{if(e[0].isIntersecting){exp.classList.add('visible');eo.unobserve(exp);}},{threshold:.1});
+  eo.observe(exp);
+}
+
+function sortCards(key,e) {
+  currentSort=key;
+  document.querySelectorAll('.sort-btn').forEach(b=>b.classList.remove('active'));
+  if(e?.target) e.target.classList.add('active');
+  const grid=document.getElementById('grid');
+  grid.style.cssText='opacity:.3;transition:opacity .15s';
+  setTimeout(()=>{
+    grid.innerHTML=getSorted(key).map(buildCard).join('');
+    grid.style.opacity='1';
+    observeCards();
+  },150);
+}
+
+function toggleCard(card){card.classList.toggle('expanded');}
+
+function observeCards() {
+  const obs=new IntersectionObserver(entries=>{
+    entries.forEach(entry=>{
+      if(entry.isIntersecting){
+        const idx=Array.from(entry.target.parentElement.children).indexOf(entry.target);
+        setTimeout(()=>entry.target.classList.add('visible'),idx*45);
+        obs.unobserve(entry.target);
+      }
+    });
+  },{threshold:.05});
+  document.querySelectorAll('.card').forEach(c=>obs.observe(c));
+}
+
+loadAllData();
+</script>
+</body>
+</html>
